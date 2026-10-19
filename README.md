@@ -1,34 +1,35 @@
 # Night Contributor
 
-Harness для ночной подготовки полезных PR в DeFi SDK, Frontend, TypeScript и
-Node.js библиотеки. Контроллер работает **на хосте**, запускает Codex CLI в
-**Docker Sandboxes**, а утром оставляет локальные ветки, patch, логи и тексты PR.
+An overnight harness for preparing useful contributions to DeFi SDKs, frontend,
+TypeScript, and Node.js libraries. The controller runs **on the host**, launches
+Codex CLI in **Docker Sandboxes**, and leaves local branches, patches, logs, and
+PR drafts for morning review.
 
-Первая версия ориентирована на небольшие исправления багов с воспроизводимым
-тестом. Отдельные свежие сессии Codex планируют, воспроизводят баг, исправляют его
-и проводят ревью. Между ними контроллер самостоятельно выполняет проверки.
+The first version focuses on small bug fixes with reproducible tests. Separate,
+fresh Codex sessions plan the work, reproduce the bug, implement a fix, and review
+the result. The controller runs verification commands between these stages.
 
 ```mermaid
 flowchart LR
-  A[GitHub issues] --> B[Очередь и отбор]
-  B --> C[Отдельный clone и Docker Sandbox]
-  C --> D[План и проверка исходного состояния]
-  D --> E[Тест воспроизводит баг]
-  E --> F[Исправление]
-  F --> G[Тесты, lint, types]
-  G --> H[Свежая сессия ревью]
-  H --> I[Локальный commit, PR.md, отчёт]
+  A[GitHub issues] --> B[Queue and selection]
+  B --> C[Separate clone and Docker Sandbox]
+  C --> D[Plan and baseline verification]
+  D --> E[Test reproduces the bug]
+  E --> F[Implement fix]
+  F --> G[Tests, lint, types]
+  G --> H[Fresh review session]
+  H --> I[Local commit, PR.md, report]
 ```
 
-## Запуск с хоста
+## Run from the host
 
-Команды ниже выполняются в обычном терминале Mac/Linux **снаружи текущей
-песочницы агента**. Внутри песочницы можно разрабатывать harness и выполнять
-`pnpm test`; создавать соседние песочницы должен хост.
+Run the commands below in a regular macOS/Linux terminal **outside the current
+agent sandbox**. You can develop the harness and run `pnpm test` inside the
+sandbox; the host must create the task sandboxes.
 
-Нужны Node.js 22+, pnpm, Git, авторизованный `gh` и работающий Docker Sandboxes CLI `sbx`.
-Версия pnpm закреплена в `packageManager` в `package.json`. Если Corepack
-доступен, активируй pnpm командой `corepack enable pnpm`.
+Requirements: Node.js 22+, pnpm, Git, an authenticated `gh`, and a working Docker
+Sandboxes CLI (`sbx`). The pnpm version is pinned in the `packageManager` field
+of `package.json`. If Corepack is available, enable pnpm with `corepack enable pnpm`.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -36,53 +37,55 @@ pnpm run build
 pnpm run contrib doctor
 ```
 
-`doctor` проверяет GitHub-доступ, имя/email автора коммита и команды Docker
-Sandboxes. Заранее создавать песочницы не нужно: harness создаёт их сам для
-каждой задачи; обычный `doctor` проверяет только CLI и не создаёт песочницу.
-Для GitHub используй `gh auth login` на хосте. Если задан невалидный
-`GH_TOKEN`/`GITHUB_TOKEN`, он может перекрывать сохранённый логин `gh`.
-Автор берётся из `git config user.name` / `git config user.email` либо из
-`author` в конфигурации. Укажи своё имя и email, связанный с GitHub.
+`doctor` checks GitHub access, the commit author's name/email, and the Docker
+Sandboxes commands. No sandbox needs to exist beforehand: the harness creates
+one for each task. The ordinary `doctor` command inspects the sandbox CLI without
+creating a sandbox.
+For GitHub, run `gh auth login` on the host. An invalid `GH_TOKEN` or
+`GITHUB_TOKEN` can override the login stored by `gh`.
+The commit author comes from `git config user.name` / `git config user.email`
+or the `author` configuration field. Use your name and an email linked to GitHub.
 
-Доступ Codex к модели нужно настроить **для Docker Sandboxes**. Авторизация
-обычного Codex на хосте не означает, что она доступна внутри sandbox. Используй
-поддерживаемый твоей версией Docker способ авторизации и один раз проверь запуск
-Codex в отдельной рабочей директории:
+Configure Codex model access **for Docker Sandboxes**. Authentication for Codex
+on the host does not automatically make it available inside a sandbox. Use the
+authentication method supported by your Docker version, then check Codex once
+in a separate working directory:
 
 ```bash
 mkdir -p .contributor/auth-check
 sbx run codex "$PWD/.contributor/auth-check"
 ```
 
-Затем проверь именно автоматизированный путь. Эта команда создаёт временную
-песочницу и делает небольшой реальный запрос к модели:
+Then check the automated execution path. This command creates a temporary
+sandbox and makes a small, real model request:
 
 ```bash
 pnpm run contrib doctor --probe
 ```
 
-`sandbox.command` по умолчанию равен `["sbx"]`. Для старого CLI можно явно задать
-`["docker", "sandbox"]`. Команда должна соответствовать установленному на хосте
-CLI; `doctor` показывает выбранную команду и исходную ошибку при её сбое.
-Если используешь ранее созданный `contributor.local.json`, обнови команду и в нём.
-Настройка OpenAI OAuth для `sbx` описана в
-[документации Docker](https://docs.docker.com/ai/sandboxes/agents/codex/).
-Автоматической замены движка или запуска upstream-команд на хосте нет.
+`sandbox.command` defaults to `["sbx"]`. For the legacy CLI, explicitly set it to
+`["docker", "sandbox"]`. The command must match the CLI installed on the host;
+`doctor` reports the selected command and its original error when it fails.
+Update the command in any existing `contributor.local.json` as well.
+OpenAI OAuth setup for `sbx` is described in the
+[Docker documentation](https://docs.docker.com/ai/sandboxes/agents/codex/).
+The harness does not automatically switch engines or run upstream commands on
+the host.
 
-## Первая ночь
+## First overnight run
 
-В [contributor.config.json](contributor.config.json) уже заданы viem, wagmi,
-ethers.js, Uniswap SDKs, TanStack Query, Zustand, Zod, ky, ofetch, ufo, Fastify и
-Undici. Это список кандидатов: текущую доступность задач и правила каждого
-проекта harness проверяет при работе.
+[contributor.config.json](contributor.config.json) includes viem, wagmi,
+ethers.js, Uniswap SDKs, TanStack Query, Zustand, Zod, ky, ofetch, ufo, Fastify,
+and Undici. These are candidates: the harness checks current task availability
+and each project's policies during execution.
 
-Сначала посмотри параметры и очередь без сетевых запросов и расходов на модель:
+First, inspect the settings and queue without network calls or model usage:
 
 ```bash
 pnpm run contrib night --dry-run
 ```
 
-Чтобы увидеть найденные задачи до запуска исполнителей:
+To inspect discovered tasks before starting the workers:
 
 ```bash
 pnpm run contrib discover
@@ -90,92 +93,94 @@ pnpm run contrib queue
 pnpm run contrib run
 ```
 
-Для обычного ночного запуска одной командой:
+For a normal overnight run with one command:
 
 ```bash
 pnpm run night
 ```
 
-`night` один раз обновляет очередь и обрабатывает выбранные задачи до лимита.
-Повторные ночи используют историю: одна issue не запускается повторно сама.
-Лимит `discovery.maxQueued` учитывает очередь только репозиториев из текущей
-конфигурации. При удалении репозитория его задачи сохраняются, но не занимают
-этот лимит и не запускаются; при возвращении репозитория снова доступны.
-Для ручного выбора есть `enqueue https://github.com/OWNER/REPO/issues/NUMBER`.
-Репозиторий должен входить в конфигурацию; issue должна быть открыта, свободна
-и не иметь известного связанного открытого PR.
+`night` refreshes the queue once and processes selected tasks within the limits.
+Subsequent runs use the saved history: an issue is never retried automatically.
+The `discovery.maxQueued` limit counts queued tasks only for repositories in the
+current configuration. Removing a repository retains its tasks but excludes them
+from this limit and from execution. Adding it back makes its queued tasks
+available again.
+To select an issue manually, use `enqueue https://github.com/OWNER/REPO/issues/NUMBER`.
+The repository must be configured, and the issue must be open, unassigned, and
+have no known linked open PR.
 
-По умолчанию: **2 параллельные задачи, до 4 задач за ночь, одна на репозиторий,
-6 часов на запуск, 75 минут на задачу, 20 минут на сессию Codex, 15 минут на
-одну команду**. Завершение/удаление песочниц может занять дополнительное время.
-Лимит diff — 12 файлов / 400 добавленных и удалённых строк.
+Defaults: **2 concurrent tasks, up to 4 tasks per night, one per repository,
+6 hours per run, 75 minutes per task, 20 minutes per Codex session, and 15 minutes
+per command**. Stopping and removing sandboxes can take additional time.
+The diff limit is 12 files / 400 added and deleted lines.
 
-`softTokenBudget: 2000000` останавливает новые этапы по usage завершённых сессий.
-Уже работающие сессии могут превысить лимит; незавершённые запросы могут не
-сообщить usage. Это **не денежный потолок**. Лимит расходов задаётся отдельно у
-провайдера. `codex.model: null` использует модель по умолчанию внутри sandbox;
-для воспроизводимости можно явно указать доступную тебе модель.
+`softTokenBudget: 2000000` stops new stages based on usage reported by completed
+sessions. Sessions already running can exceed the limit; unfinished requests
+may not report usage. This is **not a spending cap**. Configure spending limits
+separately with the provider. `codex.model: null` uses the default model inside
+the sandbox; explicitly select an available model for reproducibility.
 
-Личную конфигурацию можно хранить в игнорируемом `contributor.local.json`:
+Store personal configuration in the ignored `contributor.local.json`:
 
 ```bash
 cp contributor.config.json contributor.local.json
 pnpm run contrib night --config contributor.local.json
 ```
 
-## Что будет утром
+## Morning review
 
 ```bash
 pnpm run contrib report
 pnpm run contrib queue
 ```
 
-Артефакты находятся в `.contributor/runs/<run>/<repo>-<issue>/`:
+Artifacts are stored in `.contributor/runs/<run>/<repo>-<issue>/`:
 
-| Файл | Содержимое |
+| File | Contents |
 | --- | --- |
-| `repo/` | Изолированный checkout и локальная ветка; для `ready` есть commit |
-| `PR.md` | Заголовок и текст PR, прошедшие ревью |
-| `change.patch` | Все изменения, включая новые файлы |
-| `regression.patch` | Тест до исправления, который должен был упасть |
-| `result.json` | Статус, base/commit SHA, команды, exit codes, usage |
-| `logs/` | Prompts, JSONL Codex, stderr и логи команд |
-| `control/` | Контекст и доказательства, доступные агентам только для чтения |
+| `repo/` | Isolated checkout and local branch; includes a commit for `ready` tasks |
+| `PR.md` | Reviewed PR title and body |
+| `change.patch` | All changes, including new files |
+| `regression.patch` | The regression test before the fix, which must have failed |
+| `result.json` | Status, base/commit SHA, commands, exit codes, usage |
+| `logs/` | Prompts, Codex JSONL, stderr, and command logs |
+| `control/` | Context and evidence mounted read-only for agents |
 
-`ready` означает: исходное состояние прошло проверки; новый тест упал; после
-исправления проверки прошли; отдельная сессия одобрила diff; песочница удалена;
-создан локальный commit. Просмотри diff и текст перед ручной публикацией.
-Каждая финальная проверка должна сохранять проверяемый diff. Изменение файлов
-во время теста, lint или генерации останавливает задачу до ревью и коммита;
-форматирование и генерацию отслеживаемого кода агент завершает заранее.
-Принятие PR мейнтейнером этот статус не гарантирует.
+`ready` means the baseline passed, the new test failed, checks passed after the
+fix, a separate session approved the diff, the sandbox was removed, and a local
+commit was created. Review the diff and PR draft before publishing manually.
+Each final verification command must preserve the diff being checked. Changing
+files during tests, lint, or generation stops the task before review and commit;
+the agent must finish formatting and generating tracked code beforehand.
+This status does not guarantee that a maintainer will accept the PR.
 
-Публикация остаётся ручной. GitHub API/сайт блокируются сетевой политикой каждой
-песочницы, `origin` имеет отключённый push URL, а у контроллера реализованы
-только чтения GitHub. Перед публикацией ещё раз проверь актуальность issue и
-отсутствие конкурирующего PR. Подключи свой fork отдельным remote после просмотра.
+Publication is manual. Each sandbox's network policy blocks the GitHub API and
+website, `origin` has a disabled push URL, and the controller implements only
+GitHub reads. Before publishing, recheck that the issue is still relevant and
+has no competing PR. Add your fork as a separate remote after reviewing the work.
 
-## Расписание и восстановление
+## Scheduling and recovery
 
-Генерация файлов расписания на хосте, по местному времени:
+Generate schedule files on the host, using local time:
 
 ```bash
 pnpm run contrib schedule --hour 1
 ```
 
-Для macOS после просмотра сгенерированного plist:
+On macOS, review the generated plist, then run:
 
 ```bash
 launchctl bootstrap "gui/$(id -u)" "$PWD/.contributor/schedule/local.contributor.nightly.plist"
 ```
 
-Для Linux добавь строку из `.contributor/schedule/night.cron` через `crontab -e`.
-Оба расписания сохраняют PATH терминала, в котором запущен генератор. После
-изменения путей к инструментам сгенерируй и установи расписание заново.
-Генератор сам расписание не устанавливает. Хост и Docker должны быть доступны
-ночью; спящий/выключенный компьютер не выполняет обычный cron.
+On Linux, add the line from `.contributor/schedule/night.cron` using `crontab -e`.
+Both schedules preserve the PATH of the terminal that ran the generator.
+Regenerate and reinstall the schedule after changing tool paths.
+The generator does not install the schedule itself. The host and Docker must be
+available overnight; ordinary cron does not run while the computer is asleep or
+powered off.
 
-После аварийного завершения:
+After a crash:
 
 ```bash
 pnpm run contrib recover
@@ -183,35 +188,35 @@ pnpm run contrib queue
 pnpm run contrib retry 'owner/repo#123'
 ```
 
-`recover` проверяет, что старый PID не работает, удаляет оставшиеся песочницы и
-помечает попытки прерванными. `retry` разрешён для failed/skipped/interrupted,
-история попыток сохраняется. `Ctrl+C`/`SIGTERM` при обычной работе инициируют
-остановку текущих процессов и удаление песочниц.
+`recover` checks that the previous PID is no longer running, removes leftover
+sandboxes, and marks attempts as interrupted. `retry` is allowed for
+failed/skipped/interrupted tasks and preserves attempt history. During normal
+execution, `Ctrl+C`/`SIGTERM` stops active processes and removes sandboxes.
 
-Восстановление записывает `result.json` и обновляет отчёты затронутых запусков,
-включая уже завершённые. Если очистка не удалась, попытка получает `failed`,
-а `retry` остаётся заблокирован до успешного `recover`.
+Recovery writes `result.json` and updates reports for affected runs, including
+completed ones. If cleanup fails, the attempt becomes `failed`, and `retry`
+remains blocked until `recover` succeeds.
 
-Корни состояния и checkout приводятся к каноническим путям на хосте: каталоги
-через симлинки, в том числе `/var` на macOS, поддерживаются. Проверка подмены
-самого `.git` сохраняется.
+State and checkout roots are resolved to canonical paths on the host. Parent
+directory symlinks, including `/var` on macOS, are supported. The guard against
+replacing `.git` itself remains in place.
 
-## Проверки и ограничения
+## Verification and limitations
 
 ```bash
 pnpm test
 ```
 
-Тесты выполняют реальный цикл Git и тестовый баг на локальных fixtures, а
-Codex/Docker/GitHub заменяют контролируемыми адаптерами. Проверяются успешный
-сценарий, ложное воспроизведение, провал baseline/final checks, изменение теста,
-отклонение/изменения ревьюера, таймауты, блокировки и очистка. Реальная интеграция
-Docker/Codex проверяется отдельно командой `doctor --probe` с хоста.
+Tests exercise real Git operations and a fixture bug locally, with controlled
+adapters for Codex, Docker, and GitHub. They cover successful execution, false
+reproductions, baseline/final check failures, test mutation, reviewer rejection
+or changes, timeouts, locks, and cleanup. Check the real Docker/Codex integration
+separately with `doctor --probe` on the host.
 
-Функциональность первой версии и эксплуатационные детали:
-[docs/operations.md](docs/operations.md), устройство:
-[docs/architecture.md](docs/architecture.md).
+See [docs/operations.md](docs/operations.md) for the first version's scope and
+operational details, and [docs/architecture.md](docs/architecture.md) for the
+architecture.
 
-Интеграция основана на [OpenAI Docs: non-interactive Codex](https://developers.openai.com/codex/noninteractive/),
-[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) и
-[документации старого CLI docker sandbox](https://github.com/docker/docs/tree/f278dbfff4a3bb962dc9a2244eb6d71e4b6d7787/content/manuals/ai/sandboxes).
+The integration is based on [OpenAI Docs: non-interactive Codex](https://developers.openai.com/codex/noninteractive/),
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/), and the
+[legacy docker sandbox CLI documentation](https://github.com/docker/docs/tree/f278dbfff4a3bb962dc9a2244eb6d71e4b6d7787/content/manuals/ai/sandboxes).

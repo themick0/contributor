@@ -4,6 +4,14 @@ Build useful, reproducible contributions to established TypeScript/JavaScript
 libraries. The owner reviews local branches and PR drafts before publication.
 Optimize for useful fixes that maintainers can accept, with concrete evidence.
 
+## Language
+
+All authored repository content must be in English, including documentation,
+code comments, identifiers, CLI messages, agent prompts, test descriptions, and
+configuration descriptions. Generated reports, commit messages, and PR titles
+and descriptions must also be in English. Apply this rule regardless of the
+language used in the conversation or the source issue.
+
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 
