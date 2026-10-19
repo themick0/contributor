@@ -1,0 +1,18 @@
+{
+  "name": "night-contributor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first contribution pipeline using Codex CLI in Docker Sandboxes",
+  "packageManager": "pnpm@10.34.7",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "pnpm run build && node --test dist/test/*.test.js",
+    "contrib": "node dist/src/cli.js",
+    "doctor": "pnpm run contrib doctor",
+    "night": "pnpm run contrib night"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.9.0" }
+}

@@ -1,0 +1,28 @@
+# Dependencies and package manager cache
+node_modules/
+.pnpm-store/
+
+# Build output and tooling caches
+dist/
+coverage/
+*.tsbuildinfo
+.cache/
+
+# Local harness state, checkouts, reports, and code index
+.contributor/
+.codegraph/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+contributor.local.json
+
+# Logs
+*.log
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+._*
