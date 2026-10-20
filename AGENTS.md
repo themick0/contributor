@@ -33,17 +33,31 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
   Never fall back to running upstream commands on the host when Docker is absent.
 - Use argument arrays for subprocesses. Send prompts over stdin. Never interpolate
   issue content or model commands into a host shell.
-- Mount only a task's standalone clone and its read-only control directory.
+- Mount only a task's standalone clone (or a repository scout's scratch repo)
+  and its read-only control directory.
   Never mount the controller repo, state directory, home, or Docker socket.
 - Keep the mode local: no GitHub comments, pushes, forks, PR creation, or package
   publication. This is the user's chosen workflow.
 - Retain the baseline pass → meaningful regression failure → final pass → fresh
   reviewer approval sequence. Gate on actual process exit codes and diffs.
+- Bound repairs within the original task deadline and shared token budget.
+  Preserve original regression files and approved commands; rerun final checks
+  and obtain fresh review after each repair. Policy failures and check/reviewer
+  mutations must remain terminal. Preserve evidence from every round.
+- Nightly discovery refills share the run's attempt quotas, budget, and deadline.
+  Reuse buffered candidates and page positions without retrying task history.
 - A cleanup failure must not be reported as ready. A crashed attempt requires
   explicit recovery/retry; it must never silently count as completed.
 - Follow upstream contribution/automation policies. Skip unsuitable tasks with
   a reason. Never manufacture tests or change behavior to create activity.
 - The token budget is soft and based on reported usage, not a dollar ceiling.
+- Repository scouting uses fresh query-planning and evidence-selection sessions.
+  The host verifies candidates through paced GitHub GETs and validates citations.
+  Activate a catalog only after validation and successful sandbox cleanup.
+  Preserve pinned targets and the previous catalog on failed refreshes.
+  Successful rotation preserves accepted backlog for execution; only pins and
+  current recommendations receive new issue discovery. Explicit criteria changes
+  and exclusions still invalidate incompatible catalogs.
 
 ## Development
 

@@ -18,19 +18,24 @@ export class Store {
     const path = join(this.dir, 'state.json');
     this.state = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as State : { version: 1, tasks: [], runs: [] };
     if (this.state.version !== 1 || !Array.isArray(this.state.tasks) || !Array.isArray(this.state.runs)) throw new Error('Unsupported state file');
+    if (this.state.scouts !== undefined && !Array.isArray(this.state.scouts)) throw new Error('Invalid repository scout history');
   }
   save(): void { atomicJson(join(this.dir, 'state.json'), this.state); }
   reload(): void {
     const path = join(this.dir, 'state.json');
     if (existsSync(path)) this.state = JSON.parse(readFileSync(path, 'utf8')) as State;
   }
-  enqueue(issue: Issue, score: number): boolean {
+  enqueue(issue: Issue, score: number, skipReason?: string): boolean {
     const id = taskId(issue.repo, issue.number);
     if (this.state.tasks.some(t => t.id === id)) return false;
-    this.state.tasks.push({ id, issue, score, status: 'queued', reason: '', createdAt: new Date().toISOString(), attempts: [] });
+    this.state.tasks.push({ id, issue, score, status: skipReason ? 'skipped' : 'queued', reason: skipReason ?? '', createdAt: new Date().toISOString(), attempts: [] });
     this.save(); return true;
   }
-  queued(): Task[] { return this.state.tasks.filter(t => t.status === 'queued').sort((a, b) => b.score - a.score || a.createdAt.localeCompare(b.createdAt)); }
+  queued(): Task[] {
+    return this.state.tasks.filter(t => t.status === 'queued').sort((a, b) => b.score - a.score
+      || (Date.parse(b.issue.updatedAt) || 0) - (Date.parse(a.issue.updatedAt) || 0)
+      || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
   lock(): () => void {
     const path = join(this.dir, 'runner.lock');
     try { writeFileSync(path, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), { flag: 'wx', mode: 0o600 }); }

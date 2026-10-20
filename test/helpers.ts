@@ -18,6 +18,7 @@ export function config(): Config {
   const c = loadConfig(join(repoRoot, 'contributor.config.json'));
   c.author = { name: 'Harness Test', email: 'harness@example.invalid' };
   c.repositories = [{ repo: 'test/library', area: 'typescript', priority: 5 }];
+  c.repositoryDiscovery.enabled = false;
   return c;
 }
 export function issue(number = 1, repo = 'test/library'): Issue {

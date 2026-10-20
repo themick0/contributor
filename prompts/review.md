@@ -8,6 +8,10 @@ preserves the regression and doesn't skip/weaken existing tests, (4) controller
 logs demonstrate baseline pass, regression fail, and final pass, (5) edge cases,
 API compatibility, and relevant required checks, (6) no unrelated changes.
 Do not treat a worker's summary or passing tests alone as proof.
+When repairs occurred, inspect their feedback and changes. Earlier failed checks
+and reviews remain archived; the phases named in currentValidationPhases must
+pass for the current patch. Require the original baseline and failing regression
+evidence as well. A previous approval does not approve a changed implementation.
 
 Approve only when the entire change is merge-worthy and the regression evidence
 is meaningful. Otherwise return changes_requested with actionable findings.

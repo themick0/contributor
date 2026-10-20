@@ -10,7 +10,9 @@ import { eligible, GitHubClient, parseIssueUrl, scoreIssue } from './github.js';
 import { discover, runNight, selectTasks } from './pipeline.js';
 import { checked } from './process.js';
 import { writeReport } from './report.js';
+import { catalogFresh, readCatalog, scoutIdPattern, withCatalog } from './repositories.js';
 import { DockerSandbox } from './sandbox.js';
+import { scoutRepositories, writeScoutReport, type ScoutResult } from './scout.js';
 import { writeSchedule } from './schedule.js';
 import { workSchema } from './schemas.js';
 import { atomicJson, Store } from './store.js';
@@ -20,11 +22,12 @@ const codeRoot = fileURLToPath(new URL('../../', import.meta.url));
 const help = `night-contributor — Codex CLI in Docker Sandboxes, local artifacts only
 
   doctor [--probe]       Check host tools/auth; --probe also runs a real model smoke test
+  scout [--dry-run]      Use AI and GitHub evidence to refresh candidate repositories
   discover              Read GitHub issues and rank/enqueue candidates
   enqueue <issue-url>   Enqueue one issue in an allowed repository
   queue                 Show persistent queue and outcomes
   run [--dry-run]        Process queued issues
-  night [--dry-run]      Discover once, then process queue within limits
+  night [--dry-run]      Refresh scout if due; process and refill issues within run limits
   report                Print latest morning report
   retry <owner/repo#n>   Requeue failed/skipped/interrupted work explicitly
   recover               Clean orphan sandboxes and mark interrupted work after a crash
@@ -66,11 +69,15 @@ async function recover(config: Config, store: Store): Promise<void> {
     }
     unlock = store.lock();
     const pending = store.state.tasks.flatMap(task => task.attempts.filter(a => a.status === 'running' || a.cleanupError).map(attempt => ({ task, attempt })));
+    const scouts = (store.state.scouts ?? []).filter(scout => scout.status === 'running' || scout.cleanupError);
+    const targets = [...pending, ...scouts.map(scout => ({ scout, attempt: scout }))];
     const updatedRuns = new Set<string>();
     let failures = 0;
-    if (pending.length) {
+    if (targets.length) {
       const caps = await sandboxCapabilities(config);
-      for (const { task, attempt } of pending) {
+      for (const target of targets) {
+        const { attempt } = target;
+        if ('scout' in target && (!scoutIdPattern.test(target.scout.id) || target.scout.dir !== join(store.dir, 'scouts', target.scout.id))) throw new Error('Invalid scout recovery path');
         if (!/^contrib-[a-f0-9]{8}-\d+$/.test(attempt.sandbox)) throw new Error('Refusing to remove an unrecognized sandbox name');
         const sandbox = new DockerSandbox({ name: attempt.sandbox, repo: join(attempt.dir, 'repo'), control: join(attempt.dir, 'control'), logs: join(attempt.dir, 'logs'), config, ...caps });
         try {
@@ -83,16 +90,22 @@ async function recover(config: Config, store: Store): Promise<void> {
           if (names.some(n => typeof n !== 'string')) throw new Error('Cannot safely identify sandboxes');
           if (names.includes(attempt.sandbox)) await sandbox.remove();
           delete attempt.cleanupError;
-          attempt.status = 'interrupted'; attempt.reason = 'Recovered after runner interruption; use retry explicitly';
+          attempt.status = 'interrupted'; attempt.reason = 'scout' in target
+            ? 'Recovered repository scout; rerun scout or night to refresh the catalog'
+            : 'Recovered after runner interruption; use retry explicitly';
         } catch (error) {
           attempt.cleanupError = String(error); attempt.status = 'failed';
           attempt.reason = `Sandbox cleanup failed during recovery: ${attempt.sandbox}; run recover again`;
           failures++; console.error(`${attempt.sandbox}: ${String(error)}`); process.exitCode = 1;
         }
         attempt.finishedAt = new Date().toISOString();
-        if (task.attempts.at(-1) === attempt) { task.status = attempt.status; task.reason = attempt.reason; }
         atomicJson(join(attempt.dir, 'result.json'), attempt);
-        updatedRuns.add(attempt.runId);
+        if ('scout' in target) writeScoutReport(target.scout);
+        else {
+          const { task, attempt: taskAttempt } = target;
+          if (task.attempts.at(-1) === taskAttempt) { task.status = taskAttempt.status; task.reason = taskAttempt.reason; }
+          updatedRuns.add(taskAttempt.runId);
+        }
       }
     }
     for (const run of store.state.runs) {
@@ -121,12 +134,13 @@ async function main(): Promise<void> {
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
   const configPath = resolve(values.config), root = dirname(configPath);
-  const config = loadConfig(configPath), store = new Store(resolve(root, config.stateDir));
+  const baseConfig = loadConfig(configPath), store = new Store(resolve(root, baseConfig.stateDir));
+  let config = baseConfig;
   const controller = new AbortController();
   process.on('SIGINT', () => controller.abort()); process.on('SIGTERM', () => controller.abort());
   const signal = ['run', 'night'].includes(command)
     ? AbortSignal.any([controller.signal, AbortSignal.timeout(config.limits.nightMinutes * 60000)]) : controller.signal;
-  const github = new GitHubClient(undefined, signal);
+  const github = new GitHubClient(undefined, signal, { cooldownPath: join(store.dir, 'github-cooldown.json') });
   const log = (s: string) => console.log(s);
   if (command === 'queue') {
     const rows = store.state.tasks.map(t => ({ id: t.id, score: t.score, status: t.status, attempts: t.attempts.length, reason: t.reason }));
@@ -139,23 +153,26 @@ async function main(): Promise<void> {
     console.log(readFileSync(join(store.dir, 'runs', run.id, 'report.md'), 'utf8')); return;
   }
   if (command === 'doctor') {
-    const checks = await doctor(config, root);
+    const checks = await doctor(config, root, undefined, () => github.login());
     if (values.json) console.log(JSON.stringify(checks, null, 2));
     else checks.forEach(c => log(`${c.ok ? 'OK' : 'FAIL'} ${c.name}: ${c.detail}`));
+    if (checks.some(c => !c.ok)) { process.exitCode = 1; return; }
     if (values.probe) await probe(config, store, controller.signal);
-    if (checks.some(c => !c.ok)) process.exitCode = 1;
     return;
   }
   if (command === 'schedule') {
     log(writeSchedule(store.dir, root, configPath, Number(values.hour)).join('\n')); return;
   }
   if (command === 'recover') { await recover(config, store); return; }
-  if (['run', 'night'].includes(command) && values['dry-run']) {
+  if (['run', 'night', 'scout'].includes(command) && values['dry-run']) {
+    const catalog = readCatalog(store, baseConfig, message => console.error(message));
+    config = withCatalog(baseConfig, catalog, store.queued());
     console.log(JSON.stringify({ mode: 'local-artifacts', sandbox: config.sandbox.command, limits: config.limits,
       repositories: config.repositories.map(r => r.repo), tasks: selectTasks(store.queued(), config).map(t => t.id),
-      note: 'No GitHub calls, sandbox creation, model requests, commits, or publication. night will discover fresh issues in a real run.' }, null, 2)); return;
+      repositoryDiscovery: { ...config.repositoryDiscovery, refreshDue: config.repositoryDiscovery.enabled && (command === 'scout' || command === 'night' && !catalogFresh(catalog, baseConfig)) },
+      note: 'Offline preview only. No GitHub calls, sandbox creation, model requests, commits, or publication. night scouts repositories and refills issues within shared run limits; run uses the saved queue. Previously accepted queued work remains eligible after catalog rotation.' }, null, 2)); return;
   }
-  if (!['discover', 'enqueue', 'retry', 'run', 'night'].includes(command)) throw new Error(`Unknown command: ${command}\n${help}`);
+  if (!['scout', 'discover', 'enqueue', 'retry', 'run', 'night'].includes(command)) throw new Error(`Unknown command: ${command}\n${help}`);
   const unlock = store.lock();
   try {
     if (command === 'retry') {
@@ -164,26 +181,43 @@ async function main(): Promise<void> {
       if (task.attempts.some(a => a.cleanupError)) throw new Error('Run recover to remove the remaining sandbox before retry');
       task.status = 'queued'; task.reason = ''; store.save(); log(`Queued ${task.id}`); return;
     }
+    config = withCatalog(baseConfig, readCatalog(store, baseConfig, log));
     if (command === 'enqueue') {
       const input = parseIssueUrl(positionals[1] ?? '');
       const repository = config.repositories.find(r => r.repo.toLowerCase() === input.repo.toLowerCase());
-      if (!repository) throw new Error('Repository is not in contributor.config.json');
+      if (!repository) throw new Error('Repository is not in the pinned list or active scout catalog');
       const context = await github.context(repository.repo, input.number);
       const reason = eligible(context.issue, config);
       if (reason || context.openPullRequests.length) throw new Error(reason ?? 'Issue already has an open referenced PR');
       log(store.enqueue(context.issue, scoreIssue(context.issue, repository, config)) ? 'Issue queued' : 'Issue already exists in history; use retry for an intentional new attempt'); return;
     }
     if (command === 'discover') { log(`Queued ${await discover(store, config, github, log)} new issues`); return; }
-    const diagnostics = await doctor(config, root);
+    if (command === 'scout' && !config.repositoryDiscovery.enabled) throw new Error('Repository discovery is disabled; set repositoryDiscovery.enabled to true');
+    const diagnostics = await doctor(config, root, undefined, () => github.login());
     const failed = diagnostics.filter(d => !d.ok);
     if (failed.length) throw new Error(failed.map(d => `${d.name}: ${d.detail}`).join('\n'));
     const capabilities = await sandboxCapabilities(config);
-    if (command === 'night') log(`Queued ${await discover(store, config, github, log)} new issues`);
+    let scouting: ScoutResult | undefined;
+    if (command === 'scout' || command === 'night') {
+      scouting = await scoutRepositories(store, baseConfig, codeRoot, {
+        github, log, sandbox: (scout, repo, control, logs) => new DockerSandbox({ name: scout.sandbox, repo, control, logs, config: baseConfig, ...capabilities }),
+      }, signal, command === 'scout');
+      if (scouting.scout?.cleanupError) throw new Error('Repository scout sandbox cleanup failed; run recover before continuing');
+      if (command === 'scout') { if (scouting.scout?.status !== 'ready') process.exitCode = 1; return; }
+      if (scouting.scout && scouting.scout.status !== 'ready') log('Repository scout did not refresh the catalog; continuing with previously verified or pinned targets.');
+      config = withCatalog(baseConfig, readCatalog(store, baseConfig, log));
+    }
+    const discoveryRepositories = config.repositories;
+    config = withCatalog(baseConfig, readCatalog(store, baseConfig, log), store.queued());
     const runConfig = { ...config, author: await resolveAuthor(config, root) };
     const run = await runNight(store, runConfig, codeRoot, {
-      github, log,
+      github, log, initialTokens: scouting?.tokens ?? 0,
+      ...(command === 'night' ? { discoveryRepositories } : {}),
+      ...(scouting?.scout ? { scoutDir: scouting.scout.dir } : {}),
       sandbox: (a, repo, control, logs) => new DockerSandbox({ name: a.sandbox, repo, control, logs, config, ...capabilities }),
     }, signal);
+    const attempted = store.state.tasks.filter(task => run.taskIds.includes(task.id));
+    log(`Run complete: ${['ready', 'skipped', 'failed', 'interrupted'].map(status => `${attempted.filter(task => task.status === status).length} ${status}`).join(', ')}; ${store.queued().filter(task => config.repositories.some(repo => repo.repo.toLowerCase() === task.issue.repo.toLowerCase())).length} queued.`);
     log(`Report: ${join(store.dir, 'runs', run.id, 'report.md')}`);
     if (run.reason || store.state.tasks.some(t => t.attempts.some(a => a.runId === run.id && ['failed', 'interrupted'].includes(a.status)))) process.exitCode = 1;
   } finally { unlock(); }

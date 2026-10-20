@@ -17,6 +17,8 @@ export function writeReport(store: Store, run: Run): string {
   const ready = tasks.filter(t => t.attempts.find(a => a.runId === run.id)?.status === 'ready').length;
   const report = `# Night ${run.id}\n\n${ready} ready / ${tasks.length} attempted. Token usage reported by completed agent stages: ${run.tokens}.\n\nStarted: ${run.startedAt}. Finished: ${run.finishedAt ?? 'running'}.\n\n${run.reason || 'Local branches and drafts only.'}\n\n| Issue | Status | Tokens | Result | Artifacts |\n| --- | --- | ---: | --- | --- |\n${rows.join('\n')}\n\n## Morning review\n\nOpen each ready task's PR.md, change.patch, result.json, and logs/. The checkout is in repo/ on the recorded branch. Review the changes, check upstream issue/PR activity again, and run any remaining platform checks before publishing manually. Failed/skipped tasks include the reason and retained evidence.\n\nMerged PRs and acceptance rate are not measured by this local preparation pipeline.\n`;
   const path = join(dir, 'report.md'); writeFileSync(path, report);
+  if (run.discoveryRounds !== undefined) writeFileSync(path, `\nIssue discovery rounds: ${run.discoveryRounds}. ${escape(run.discoveryStop ?? 'In progress')}.\n`, { flag: 'a' });
+  if (run.scoutDir) writeFileSync(path, `\nRepository discovery: [scout report](${encodeURI(relative(dir, run.scoutDir))}/report.md). This run's token total includes any new scout stages. Cached stages are not charged again.\n`, { flag: 'a' });
   writeFileSync(join(store.dir, 'latest-report.md'), `Latest report: [${run.id}](runs/${run.id}/report.md)\n`);
   return path;
 }

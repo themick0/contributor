@@ -31,11 +31,11 @@ export async function sandboxCapabilities(config: Config, run: Executor = execut
   const rm = await help('rm');
   return { forceRemove: rm.includes('--force') };
 }
-export async function doctor(config: Config, root: string, run: Executor = execute): Promise<Diagnostic[]> {
+export async function doctor(config: Config, root: string, run: Executor = execute, githubLogin?: () => Promise<string>): Promise<Diagnostic[]> {
   const result: Diagnostic[] = [{ name: 'Node.js', ok: Number(process.versions.node.split('.')[0]) >= 22, detail: process.version }];
   for (const [name, action] of [
     ['Git', async () => { const r = await run(['git', '--version']); if (r.code) throw new Error(r.stderr); return r.stdout.trim(); }],
-    ['GitHub', async () => { const r = await run(['gh', 'api', '--method', 'GET', 'user', '--jq', '.login'], { timeoutMs: 20000 }); if (r.code || !r.stdout.trim()) throw new Error('GitHub API request failed. Authenticate gh on the host; check GH_TOKEN/GITHUB_TOKEN overrides and network access.'); return `API access verified (${r.stdout.trim()})`; }],
+    ['GitHub', async () => { if (githubLogin) return `API access verified (${await githubLogin()})`; const r = await run(['gh', 'api', '--method', 'GET', 'user', '--jq', '.login'], { timeoutMs: 20000 }); if (r.code || !r.stdout.trim()) throw new Error('GitHub API request failed. Authenticate gh on the host; check GH_TOKEN/GITHUB_TOKEN overrides and network access.'); return `API access verified (${r.stdout.trim()})`; }],
     ['Commit author', async () => { const a = await resolveAuthor(config, root); return `${a.name} <${a.email}>`; }],
     ['Docker Sandboxes', async () => { await sandboxCapabilities(config, run); return config.sandbox.command.join(' ') + ' create/exec/network/rm available'; }],
   ] as const) {

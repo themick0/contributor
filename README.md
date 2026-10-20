@@ -7,10 +7,12 @@ PR drafts for morning review.
 
 The first version focuses on small bug fixes with reproducible tests. Separate,
 fresh Codex sessions plan the work, reproduce the bug, implement a fix, and review
-the result. The controller runs verification commands between these stages.
+the result. The controller runs verification commands between these stages and
+allows bounded repairs when final checks or review find an implementation defect.
 
 ```mermaid
 flowchart LR
+  S[AI repository scout + GitHub evidence] --> A
   A[GitHub issues] --> B[Queue and selection]
   B --> C[Separate clone and Docker Sandbox]
   C --> D[Plan and baseline verification]
@@ -19,6 +21,9 @@ flowchart LR
   F --> G[Tests, lint, types]
   G --> H[Fresh review session]
   H --> I[Local commit, PR.md, report]
+  G -->|Check failure| R[Bounded repair]
+  H -->|Implementation findings| R
+  R --> G
 ```
 
 ## Run from the host
@@ -76,8 +81,9 @@ the host.
 
 [contributor.config.json](contributor.config.json) includes viem, wagmi,
 ethers.js, Uniswap SDKs, TanStack Query, Zustand, Zod, ky, ofetch, ufo, Fastify,
-and Undici. These are candidates: the harness checks current task availability
-and each project's policies during execution.
+and Undici as pinned targets. AI repository discovery is enabled by default and
+adds suitable libraries beyond this list. The harness checks current task
+availability and each project's policies during execution.
 
 First, inspect the settings and queue without network calls or model usage:
 
@@ -85,9 +91,11 @@ First, inspect the settings and queue without network calls or model usage:
 pnpm run contrib night --dry-run
 ```
 
-To inspect discovered tasks before starting the workers:
+To refresh candidate repositories and inspect discovered tasks before starting
+the workers (the scout uses real model requests):
 
 ```bash
+pnpm run contrib scout
 pnpm run contrib discover
 pnpm run contrib queue
 pnpm run contrib run
@@ -99,20 +107,79 @@ For a normal overnight run with one command:
 pnpm run night
 ```
 
-`night` refreshes the queue once and processes selected tasks within the limits.
-Subsequent runs use the saved history: an issue is never retried automatically.
+`night` refreshes repository recommendations when due, processes the queue, and
+refills it while work slots and run budgets remain. `scout` forces a repository refresh;
+`discover` and `run` reuse the saved catalog without starting a new scout.
+
+The scout uses two fresh Codex sessions in a scratch Docker Sandbox. The first
+plans searches from `repositoryDiscovery.criteria` and `areas`. The host executes
+the searches and fetches current metadata, language mix, README, contribution
+instructions, and small issue/PR samples. The second session evaluates that
+evidence and supplies reasons and source quotes. The host validates repository
+identities, thresholds, and quotes before activating recommendations. Models
+still judge semantic relevance and policy; task planning rechecks both.
+
+Defaults: **1,000+ stars, a push within 180 days, JavaScript/TypeScript code,
+6 queries with 10 results each, up to 12 candidate checks and 6 selected targets**.
+The scout has a **30-minute deadline and a 200,000 soft token budget**, and its
+usage counts toward the night budget. Recommendations refresh after **24 hours**
+or changed settings. They live in `.contributor/repositories.json`; the pinned
+config is not rewritten. Reports, rejected candidates and evidence are retained
+in `.contributor/scouts/<id>/`. A failed refresh retains the previous compatible
+catalog; cleanup failures require `recover`.
+Successful rotation also preserves previously accepted queued work for execution;
+new issue searches use only pinned targets and current recommendations.
+See [repository discovery settings](docs/operations.md#ai-repository-discovery)
+for exclusions, cache behavior and disabling the scout.
+
+Discovery checks current issue activity and linked PRs before adding candidates
+to the queue. It gives different repositories an initial share of queue slots,
+then fills the remaining capacity. Defaults are up to **3 pages of 30 issues per
+repository and 60 candidate checks per scan**. It skips scanning a full queue.
+Screened rejections remain in history so later scans can get past them.
+Within one night, refills reuse buffered candidates and continue from later pages,
+up to **12 discovery rounds**, under the same token, time, and work attempt limits.
+Repository scouting inspects up to **3 pages of 20 issues** and gives the model
+the **5 highest-ranked eligible samples**; it can stop earlier when it has enough.
+
+GitHub preflight checks each selected issue again. Eligibility skips and clean
+planner declines are replaced from the queue, including from the same repository.
+These skips consume neither the run's nor the repository's work attempt quota;
+planning tokens and elapsed time still count. The offline dry run shows only the
+initial selection; live checks and planning can change which issues proceed.
+Subsequent runs use the saved history: failed attempts require explicit retry.
 The `discovery.maxQueued` limit counts queued tasks only for repositories in the
-current configuration. Removing a repository retains its tasks but excludes them
-from this limit and from execution. Adding it back makes its queued tasks
-available again.
+active target set, including retained backlog during a night. Catalog rotation
+keeps queued work eligible, with fresh issue preflight and policy checks. Removing
+a pin, changing scout settings, or disabling scouting can make targets inactive;
+their task history remains saved.
 To select an issue manually, use `enqueue https://github.com/OWNER/REPO/issues/NUMBER`.
-The repository must be configured, and the issue must be open, unassigned, and
+The repository must be pinned or in the active catalog, and the issue must be open, unassigned, and
 have no known linked open PR.
 
-Defaults: **2 concurrent tasks, up to 4 tasks per night, one per repository,
+Defaults: **2 concurrent tasks, up to 4 work attempts per night, one per repository,
 6 hours per run, 75 minutes per task, 20 minutes per Codex session, and 15 minutes
 per command**. Stopping and removing sandboxes can take additional time.
 The diff limit is 12 files / 400 added and deleted lines.
+Attempt quotas include failures and work that passes planning, including a
+reproducer that later declines the task. Replacements stop when available search
+results are exhausted or the run reaches its discovery, attempt, time, token, or GitHub limits. Four
+work attempts do not guarantee four ready contributions.
+
+`limits.maxRepairAttempts: 2` allows up to two fresh repair sessions within one
+attempt after failed final tests or actionable reviewer findings. Repairs share
+the original task deadline and night budget. The original regression files stay
+unchanged; every repair reruns final checks and requires fresh reviewer approval.
+Policy failures, invalid regression evidence, and checkout mutations by checks or
+the reviewer remain terminal. Set the repair limit to `0` to disable repairs.
+
+GitHub reads share a serial request queue, including preflight checks and every
+page of issue context. Rate limits trigger a pause using `Retry-After` and quota
+reset headers. Without those headers, retries wait 1, 2, 4, 8, and 16 minutes.
+Temporary network failures and HTTP 5xx responses also receive bounded retries.
+The cooldown is saved in `.contributor/github-cooldown.json` and respected after
+a restart. Retry messages go to stderr, and all waits honor cancellation and the
+applicable task/run deadline. See [GitHub request handling](docs/operations.md#github-request-handling).
 
 `softTokenBudget: 2000000` stops new stages based on usage reported by completed
 sessions. Sessions already running can exceed the limit; unfinished requests
@@ -143,6 +210,7 @@ Artifacts are stored in `.contributor/runs/<run>/<repo>-<issue>/`:
 | `change.patch` | All changes, including new files |
 | `regression.patch` | The regression test before the fix, which must have failed |
 | `result.json` | Status, base/commit SHA, commands, exit codes, usage |
+| `repair-N.json`, `review-repair-N.json` | Repair responses and subsequent independent reviews, when needed |
 | `logs/` | Prompts, Codex JSONL, stderr, and command logs |
 | `control/` | Context and evidence mounted read-only for agents |
 
@@ -152,6 +220,11 @@ commit was created. Review the diff and PR draft before publishing manually.
 Each final verification command must preserve the diff being checked. Changing
 files during tests, lint, or generation stops the task before review and commit;
 the agent must finish formatting and generating tracked code beforehand.
+Earlier failed checks and reviews remain in the artifacts; numbered repair logs
+and `control/repair-N.feedback.json` explain each additional round. The original
+candidate and every repaired candidate are saved in `control/candidate*.patch`.
+The run report
+includes discovery rounds and the reason discovery stopped.
 This status does not guarantee that a maintainer will accept the PR.
 
 Publication is manual. Each sandbox's network policy blocks the GitHub API and

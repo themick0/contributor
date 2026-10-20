@@ -4,8 +4,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execute } from '../src/process.js';
 import { writeReport } from '../src/report.js';
+import { writeScoutReport } from '../src/scout.js';
 import { atomicJson, Store } from '../src/store.js';
-import type { Attempt, Run } from '../src/types.js';
+import type { Attempt, Run, ScoutRun } from '../src/types.js';
 import { config, issue, repoRoot, temp } from './helpers.js';
 
 function recoveryFixture(t: TestContext, completed = false) {
@@ -27,8 +28,8 @@ function recoveryFixture(t: TestContext, completed = false) {
   writeFileSync(join(bin, 'sbx'), `#!/bin/sh
 case "$*" in
   *--help) printf '%s\\n' 'sbx sandbox create --name exec --workdir policy --sandbox rm --force' ;;
-  'ls --json') printf '%s\\n' '[{"name":"contrib-1234abcd-1"}]' ;;
-  'rm --force contrib-1234abcd-1')
+  'ls --json') printf '%s\\n' '[{"name":"contrib-1234abcd-1"},{"name":"contrib-1234abcd-0"}]' ;;
+  'rm --force contrib-1234abcd-1'|'rm --force contrib-1234abcd-0')
     if [ "$HARNESS_TEST_FAIL_RM" = 1 ]; then printf '%s\\n' 'Fixture removal failed' >&2; exit 1; fi ;;
   *) exit 64 ;;
 esac
@@ -103,4 +104,21 @@ test('recover remains retryable when writing a completed run report fails', { sk
   assert.equal(recovered.code, 0, recovered.stderr);
   assert.deepEqual(f.result(), f.reload().tasks[0]!.attempts[0]);
   assert.match(f.report(), /\| interrupted \|/);
+});
+
+test('recover tracks orphan scout sandboxes and retains failed cleanup for another recovery', { skip: process.platform === 'win32' }, async t => {
+  const f = recoveryFixture(t), id = '2026-01-01T01-00-00-000Z-1234abcd';
+  const scout: ScoutRun = { id, dir: join(f.store.dir, 'scouts', id), sandbox: 'contrib-1234abcd-0',
+    startedAt: '2026-01-01T01:00:00.000Z', status: 'running', reason: '', tokens: 100, selected: [], assessments: [] };
+  f.store.state.scouts = [scout]; f.store.save(); writeScoutReport(scout);
+  const failed = await f.cli(['recover'], true);
+  assert.equal(failed.code, 1); assert.ok(f.reload().scouts![0]!.cleanupError);
+  assert.equal(f.reload().scouts![0]!.status, 'failed');
+  const recovered = await f.cli(['recover']);
+  assert.equal(recovered.code, 0, recovered.stderr);
+  const saved = f.reload().scouts![0]!;
+  assert.equal(saved.status, 'interrupted'); assert.equal(saved.cleanupError, undefined);
+  assert.match(saved.reason, /rerun scout or night/);
+  assert.deepEqual(JSON.parse(readFileSync(join(scout.dir, 'result.json'), 'utf8')), saved);
+  assert.match(readFileSync(join(scout.dir, 'report.md'), 'utf8'), /Status: interrupted/);
 });

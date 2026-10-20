@@ -5,23 +5,73 @@ model output as a proposal; deterministic code owns state transitions and gates.
 
 | Component | Responsibility |
 | --- | --- |
-| `src/github.ts` | Read-only GitHub REST calls via gh; issue, comments, timeline |
+| `src/github.ts` | Repository search, issue context, and pagination via GitHub REST |
+| `src/github-api.ts` | Serial GET queue via gh, pacing, bounded retries, persistent cooldown |
 | `src/store.ts` | Atomic JSON snapshots, persistent deduplication, exclusive lock |
-| `src/pipeline.ts` | Ranking, bounded scheduling, stage sequencing, quality gates |
+| `src/discovery.ts` | Bounded paginated discovery, repository diversity, candidate screening |
+| `src/scout.ts` | AI query planning and repository assessment, evidence collection, tracked sandbox lifecycle |
+| `src/repositories.ts` | Catalog validation/cache, pinned target merge, model output and citation validation |
+| `src/pipeline.ts` | Bounded scheduling, stage sequencing, quality gates |
 | `src/sandbox.ts` | Native docker sandbox / sbx create, exec, network policy, rm |
 | `src/git.ts` | Fresh shallow clones, host-side diff inspection and local commits |
 | `src/process.ts` | argv spawning, streaming logs, output limits, process cancellation |
 | `src/doctor.ts` | Host dependency/auth and CLI capability checks |
 | `src/report.ts` | Run summary and links to evidence |
 | `src/schedule.ts` | Generates host-specific launchd/cron artifacts |
-| `prompts/` | Common instructions and four role prompts |
+| `prompts/` | Task instructions and role prompts; separate repository scout prompts |
 
 ## Boundaries
 
-Every attempt gets a standalone clone, containing its own `.git` directory. A
-linked Git worktree would need the parent repository to resolve its `.git` file
-inside Docker, so this implementation uses clones. Concurrent tasks never share
-a checkout. The scheduler also prevents concurrent work on the same repository.
+Repository scouting runs before issue discovery when enabled and due. A fresh
+Codex session proposes GitHub queries. The host adds threshold filters, fetches
+and verifies facts, then supplies bounded source excerpts to a second fresh
+session. The host validates candidate identity, model classifications, selection
+limits and quote provenance before publishing a separate catalog. Semantic
+relevance and policy interpretation remain model judgments, rechecked at task
+planning. Pinned config is never rewritten. Compatible successful catalogs are
+cached; failed refreshes preserve them. Catalogs are replaced only after sandbox
+cleanup, and orphan scouts participate in explicit recovery. New scout stage
+usage counts toward the enclosing night budget.
+Successful catalog rotation retains repositories with accepted pending or failed
+work from the previous compatible catalog. Only queued tasks activate those
+entries for execution; new discovery uses pins and current recommendations.
+Issue evidence is a bounded paginated search (20 × 3 by default), reduced to the
+five highest-ranked eligible samples for the selection session.
+
+The scout sandbox mounts an isolated scratch Git repository and its read-only
+control directory. It never mounts the catalog or state snapshot. All GitHub
+research uses the controller's existing serial GET queue and persistent cooldown.
+It runs no upstream installs or verification commands.
+
+Every attempt that passes GitHub preflight gets a standalone clone, containing
+its own `.git` directory. A linked Git worktree would need the parent repository
+to resolve its `.git` file inside Docker, so this implementation uses clones.
+Concurrent tasks never share a checkout. The scheduler also prevents concurrent
+work on the same repository.
+GitHub preflight skips are recorded without cloning or starting a sandbox.
+
+Workers select candidates from the configured repositories' ranked queue as
+slots become available. Global and per-repository attempt slots are reserved
+before preflight; a closed, assigned, excluded, or PR-linked issue releases both
+slots so its worker can take the next candidate. A planner declining an unchanged
+checkout also releases both slots once sandbox cleanup succeeds. Its token usage
+remains charged. Errors, cleanup failures, and attempts that pass planning keep
+their slots. This bounds actual work without ending a run after its first
+few candidates prove ineligible. Unstarted candidates remain queued.
+`night` alternates workers with bounded queue refills under one run, token total,
+deadline, and set of quotas. A shared discovery session retains page positions,
+seen IDs, and unused candidates across rounds. Repositories with exhausted work
+slots receive no further discovery requests. `run` only consumes saved tasks.
+
+Discovery pages past known history, screens current issue context before enqueue,
+and records each definitive rejection or accepted candidate immediately. Initial screening
+slots are shared across configured repositories; remaining capacity favors
+repositories with fewer queued tasks. Search pages and candidate checks have
+separate bounds. Queued snapshots encountered during discovery are refreshed;
+completed/skipped history is never silently retried. New ranking rewards code
+examples, reproduction links, and recent activity. Equal scores in an existing
+queue are ordered by issue activity before insertion time. Runtime preflight
+still refetches context because eligibility can change after discovery.
 
 Only the clone and a read-only control directory are mounted. The queue, other
 checkouts, host home, and controller code remain outside those mounts. Before
@@ -65,6 +115,10 @@ the selected local preparation workflow; raw/codeload content isn't blocked.
 9. A fresh reviewer sees actual diffs and controller-owned logs. Require approval,
    meaningful regression, policy compliance, no findings, and a usable PR draft.
    The checkout must remain identical during review.
+   Failed final checks or implementation findings may trigger a bounded repair
+   session and a repeat of steps 8–9. The original regression hashes, approved
+   commands, task deadline, and shared token total remain in force. Policy or
+   regression rejection and checkout mutations cannot trigger repairs.
 10. Delete sandbox. Recheck HEAD and diff after shutdown. Only then commit on the
     host, export patch and PR.md, and mark ready.
 
@@ -78,7 +132,10 @@ checks alone.
 
 Queue identity is case-insensitive `owner/repo#issue`. Completed and skipped
 tasks remain in history. Only explicit retry requeues one. Each attempt has a new
-checkout and sandbox. There is no unbounded model retry or repair loop.
+checkout and sandbox. A failed attempt is never automatically requeued. Repairs
+within an attempt default to two rounds and terminate on their cap or any
+task/run limit. Every round keeps separate model output, feedback, and check logs;
+fresh review receives the current passing phases and archived earlier failures.
 
 Mutation commands hold `runner.lock`; readonly commands read atomic snapshots.
 Timeouts/SIGTERM stop the host process group. Because killing an exec client

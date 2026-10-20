@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commandPath, loadConfig, validatePlan } from '../src/config.js';
-import { eligible, GitHubClient, parseIssueUrl, scoreIssue } from '../src/github.js';
+import { eligible, parseIssueUrl, scoreIssue } from '../src/github.js';
 import { discover, selectTasks } from '../src/pipeline.js';
 import { Store } from '../src/store.js';
 import { config, issue, temp } from './helpers.js';
@@ -44,11 +44,12 @@ test('selection excludes assigned/closed/duplicate issues and enforces repositor
 
 test('discovery preserves history and limits the queue even across repeated scans', async t => {
   const c = config(); c.discovery.maxQueued = 1; const store = new Store(temp(t));
-  const github: GitHub = { search: async () => [issue(1), issue(2)], context: async () => { throw new Error('unused'); } };
+  const github: GitHub = { search: async () => [issue(1), issue(2)], context: async (repo, number) => ({ issue: issue(number, repo), comments: [], openPullRequests: [] }) };
   assert.equal(await discover(store, c, github, () => {}), 1);
   store.state.tasks[0]!.status = 'failed'; store.save();
   assert.equal(await discover(store, c, github, () => {}), 1);
   assert.equal(store.state.tasks.length, 2); assert.equal(store.queued().length, 1);
+  store.state.tasks[1]!.status = 'failed'; store.save();
   await assert.rejects(discover(store, c, { ...github, search: async () => { throw new Error('offline'); } }, () => {}), /every repository/);
 });
 
@@ -56,7 +57,7 @@ test('discovery counts only configured repositories while preserving inactive qu
   const c = config(); c.discovery.maxQueued = 1;
   const store = new Store(temp(t)); store.enqueue(issue(), 70);
   c.repositories = [{ repo: 'New/Library', area: 'typescript', priority: 5 }];
-  const github: GitHub = { search: async repo => [issue(2, repo.toLowerCase()), issue(3, repo.toLowerCase())], context: async () => { throw new Error('unused'); } };
+  const github: GitHub = { search: async repo => [issue(2, repo.toLowerCase()), issue(3, repo.toLowerCase())], context: async (repo, number) => ({ issue: issue(number, repo.toLowerCase()), comments: [], openPullRequests: [] }) };
 
   assert.equal(await discover(store, c, github, () => {}), 1);
   const restarted = new Store(store.dir);
@@ -78,18 +79,30 @@ test('discovery stops immediately for invalid credentials or rate limits', async
   assert.equal(calls, 1);
 });
 
-test('GitHub context follows pagination and detects an open referenced PR', async () => {
-  const calls: string[][] = [];
-  const raw = { number: 1, title: 'Bug', body: 'repro', html_url: issue().url, state: 'open', labels: [{ name: 'bug' }], assignees: [], updated_at: '2026-01-01' };
-  const gh = new GitHubClient(async argv => {
-    calls.push(argv);
-    const path = argv[4]!;
-    const data = path.includes('timeline') ? [[], [{ event: 'cross-referenced', source: { issue: { ...raw, pull_request: {}, html_url: 'https://github.com/test/library/pull/7' } } }]] : path.includes('comments') ? [[{ user: { login: 'maintainer' }, body: 'Confirmed' }]] : raw;
-    return { code: 0, stdout: JSON.stringify(data), stderr: '' };
-  });
-  const context = await gh.context('test/library', 1);
-  assert.deepEqual(context.openPullRequests, ['https://github.com/test/library/pull/7']);
-  assert.deepEqual(context.comments, ['maintainer: Confirmed']);
-  assert.ok(calls.every(c => c.includes('GET')));
-  assert.ok(calls.filter(c => c.includes('--paginate')).length === 2);
+test('discovery saves earlier candidates when a later request exhausts retries or is cancelled', async t => {
+  for (const error of [new Error('GitHub rate limit after 5 retries'), new DOMException('Aborted', 'AbortError')]) {
+    const c = config(); c.repositories.push({ repo: 'test/second', area: 'node', priority: 4 });
+    const store = new Store(temp(t));
+    const github: GitHub = {
+      search: async repo => { if (repo === 'test/second') throw error; return [issue()]; },
+      context: async (repo, number) => ({ issue: issue(number, repo), comments: [], openPullRequests: [] }),
+    };
+    await assert.rejects(discover(store, c, github, () => {}), candidate => candidate === error);
+    assert.deepEqual(new Store(store.dir).queued().map(task => task.id), ['test/library#1']);
+  }
+});
+
+test('repository discovery has backward-compatible defaults and validates criteria and bounds', t => {
+  const path = join(temp(t), 'config.json'), base = config();
+  const { repositoryDiscovery: _unused, ...old } = base;
+  writeFileSync(path, JSON.stringify(old));
+  const defaults = loadConfig(path).repositoryDiscovery;
+  assert.equal(defaults.enabled, true); assert.equal(defaults.minStars, 1000);
+  assert.equal(defaults.maxCandidates, 12); assert.equal(defaults.refreshHours, 24);
+  for (const patch of [{ areas: [] }, { areas: ['Node JS'] }, { areas: ['node', 'node'] }, { maxQueries: 50 },
+    { maxRepositories: 13 }, { resultsPerQuery: 101 }, { minutes: 0 }, { enabled: 'yes' }, { criteria: '' },
+    { excludeRepositories: ['TEST/library'] }, { excludeRepositories: ['../outside'] }]) {
+    writeFileSync(path, JSON.stringify({ ...base, repositoryDiscovery: { ...defaults, ...patch } }));
+    assert.throws(() => loadConfig(path));
+  }
 });

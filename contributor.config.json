@@ -7,14 +7,26 @@
     "concurrency": 2, "maxTasks": 4, "maxTasksPerRepo": 1,
     "nightMinutes": 360, "taskMinutes": 75, "agentMinutes": 20,
     "commandMinutes": 15, "softTokenBudget": 2000000,
-    "maxChangedFiles": 12, "maxChangedLines": 400
+    "maxChangedFiles": 12, "maxChangedLines": 400, "maxRepairAttempts": 2
   },
   "discovery": {
     "issuesPerRepo": 30, "maxQueued": 30, "minScore": 30,
+    "maxPagesPerRepo": 3, "maxCandidateChecks": 60, "maxRoundsPerNight": 12,
     "includeLabels": ["bug", "good first issue", "help wanted", "confirmed", "accepted"],
     "excludeLabels": ["wontfix", "duplicate", "invalid", "question", "needs reproduction", "needs more info", "breaking change"]
   },
   "author": null,
+  "repositoryDiscovery": {
+    "enabled": true,
+    "criteria": "Established DeFi SDKs, frontend libraries, TypeScript and Node.js packages, and developer utilities with useful, testable JavaScript/TypeScript contribution opportunities. Prefer active maintainers and evidence of external contributions. Exclude applications, demos, tutorials, and projects that prohibit this workflow.",
+    "areas": ["defi", "frontend", "typescript", "node"],
+    "excludeRepositories": [],
+    "minStars": 1000, "maxInactiveDays": 180,
+    "maxQueries": 6, "resultsPerQuery": 10, "maxCandidates": 12,
+    "maxRepositories": 6, "refreshHours": 24, "minutes": 30,
+    "issuesPerPage": 20, "maxIssuePages": 3, "issueSamples": 5,
+    "softTokenBudget": 200000
+  },
   "repositories": [
     { "repo": "wevm/viem", "area": "defi", "priority": 5 },
     { "repo": "wevm/wagmi", "area": "defi", "priority": 5 },

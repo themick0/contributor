@@ -12,3 +12,14 @@ export const reviewSchema = object({
   verdict: { type: 'string', enum: ['approve', 'changes_requested'] }, summary: text,
   findings: list, regressionIsMeaningful: { type: 'boolean' }, policyCompliant: { type: 'boolean' }, title: text, body: text,
 });
+export const scoutPlanSchema = object({
+  queries: { type: 'array', items: object({ area: text, query: text }) },
+});
+export const scoutSelectionSchema = object({
+  repositories: { type: 'array', items: object({
+    repo: text, decision: { type: 'string', enum: ['select', 'reject'] }, area: text,
+    priority: { type: 'integer' }, reason: text,
+    policy: { type: 'string', enum: ['allowed', 'unspecified', 'prohibited', 'permission_required', 'unclear'] },
+    evidence: { type: 'array', items: object({ source: text, quote: text }) },
+  }) },
+});

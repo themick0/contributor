@@ -15,7 +15,7 @@ test('generated cron runs with user-installed tools and a minimal scheduler PATH
   const configPath = join(root, 'config.json'); writeFileSync(configPath, JSON.stringify(c));
   writeFileSync(join(bin, 'gh'), `#!/bin/sh
 case "$4" in
-  user) printf '%s\\n' fixture-user ;;
+  user) printf '%s\\n' '{"login":"fixture-user"}' ;;
   repos/test/library) printf '%s\\n' '{"archived":false,"disabled":false}' ;;
   search/issues) printf '%s\\n' '{"items":[]}' ;;
   *) exit 64 ;;
